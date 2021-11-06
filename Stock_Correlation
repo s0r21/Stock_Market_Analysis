@@ -1,0 +1,55 @@
+# Stock market correlation using R and packages in R. This data gives back a correlation of two stocks (that you choose) listed on Yahoo Finance.
+# The correlation shows the relationship for the past 100 days.
+
+install.packages(c("tidyverse", 
+                   "quantmod",
+                   "forecast",
+                   "rugarch"))
+
+c(library(tidyverse), 
+  library(quantmod),
+  library(forecast),
+  library(rugarch))
+
+Stock_Pick_1 <- readline(prompt="Stock Quote (1): ")
+Stock_Pick_2 <- readline(prompt="Stock Quote (2): ")
+
+
+# Getting the stock market data from Yahoo (using quantmods getSymbols function)
+Stock_1 <- getSymbols(Symbols = Stock_Pick_1,
+                    periodicity = "daily",
+                    src = "yahoo",
+                    from = Sys.Date() - 100,
+                    auto.assign = FALSE)
+Stock_2 <- getSymbols(Symbols = Stock_Pick_2,
+                    periodicity = "daily",
+                    from = Sys.Date() - 100,
+                    src = "yahoo",
+                    auto.assign = FALSE)
+
+# Boolean in case a stock is new and does not have 100 rows (or days) in it. 
+
+stock_timeframe <- if(nrow(Stock_1) > nrow(Stock_2)) {
+  nrow(Stock_2)
+} else {
+  nrow(Stock_1)
+}
+
+# Putting the stock data into a dataframe (NOTE: column 4 represents the closing price of the stock).
+
+df <- data.frame(Stock_1[1:stock_timeframe, 4],
+                 Stock_2[1:stock_timeframe, 4])
+
+# Running the actual correlation
+Stock_Correlation <- cor(df[,1], df[,2])
+
+# Putting the results into a matrix that shows the two stock Symbols with the correlation coefficent value.
+Stock_Matrix <- matrix(Stock_Correlation)
+colnames(Stock_Matrix) <- Stock_Pick_1
+rownames(Stock_Matrix) <- Stock_Pick_2
+
+# Printing the results.
+print(Stock_Matrix)
+
+
+
