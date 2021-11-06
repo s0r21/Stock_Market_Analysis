@@ -1,0 +1,233 @@
+# Auto Arima combined with a GARCH Model. Uses AIC to get ARMA(p,q).
+
+# Installing / Loading the packages
+install.packages(c("tidyverse", 
+                  "quantmod",
+                  "forecast",
+                  "aTSA",
+                  "TSA",
+                  "rugarch",
+                  "tseries")
+
+# Loading the Library Packages
+c(library(tidyverse), 
+  library(quantmod),
+  library(forecast),
+  library(aTSA),
+  library(TSA),
+  library(rugarch),
+  library(tseries))
+
+# Asking the user to choose the stock they are interested.
+Stock_Pick <- readline(prompt="Stock Quote: ")
+
+# Using quantmods getSymbols function to get the stock data from Yahoo Finance. NOTE: from is blanked out to allow the user to choose how many days they want to go back.
+Stock <- getSymbols(Symbols = Stock_Pick,
+           periodicity = "daily",
+           to = Sys.Date(),
+#          from = Sys.Date() - 1000,
+           src = "yahoo",
+           auto.assign = FALSE)
+
+# Manipulating the dataset. NOTE: the 4th column in "Stock" is the closing price of the stock.
+df <- Stock[c(seq(1,(nrow(Stock)-1),1)),4]
+df <- data.frame(df)
+df <- na.omit(df)
+
+# Function that transforms the closing prices into average returns. 
+Ln_Norm <- function(x){
+  return (log(x/lag(x)))
+}
+
+# Applies the function to the dataset and gets rid of our first row (first value of our dataset = NaN)
+df_Norm <- as.data.frame(lapply(df, Ln_Norm))
+df_Norm <- df_Norm[2:(nrow(df_Norm)),]
+df_Norm <- data.frame(df_Norm)
+
+# Creating the ARIMA Model using the auto.arima function from forecast.
+ARIMA_Stock <- auto.arima(df_Norm[,1], optim.control = list(maxit = 10000), 
+                          max.p = 100, max.P = 100, max.q = 100, max.Q = 100, max.order = 400)
+
+# Values of the AR(P), MA(Q). Because of the "Ln_Norm" function, we don't need to worry about intergration in AR(I)MA. 
+Chosen_ARMA_Models <- matrix(c( ARIMA_Stock[["arma"]][1], ARIMA_Stock[["arma"]][2]),
+                             nrow = 2)
+rownames(Chosen_ARMA_Models) <- c("AR(P)",
+                                  "MA(Q)")
+colnames(Chosen_ARMA_Models) <- Stock_Pick
+
+# Testing Normality using Augmented Dicky-Fuller & PP -> Remeber, if the pval is less than 0.05, you're data is stationary.
+# Testing for normality within residuals.
+
+ADF Test. If alpha < 5% then your data == normal.
+stationary.test(ARIMA_F$residuals)
+stationary.test(ARIMA_VIX$residuals)
+stationary.test(ARIMA_SPX$residuals)
+
+# GARCH Close
+
+{
+  
+  # Building the GARCH model using an order of (1,1) with the ARMA (P,Q) values. 
+  
+  GARCH_Model_Stock <- ugarchfit(data = df_Norm, 
+                                 spec = ugarchspec(mean.model = list(armaOrder = c(ARIMA_Stock[["arma"]][1], ARIMA_Stock[["arma"]][2])),
+                                                   variance.model = list(model = 'fGARCH', submodel = 'TGARCH', garchOrder = c(1,1))),
+                                 solver = 'hybrid'
+                                 )
+ 
+  GARCH_Fitted_Stock <- GARCH_Model_Stock@fit[["fitted.values"]]
+  
+}
+
+# These are the bounds to calculate +/- 2 Standard Deviations from the Mean.
+
+{
+  
+  n_ahead <- 2
+  GARCH_Mean_Stock_forecast <- ugarchforecast(GARCH_Model_Stock, n.ahead = n_ahead)@forecast[["seriesFor"]][1]
+  GARCH_Sigma_Stock_forecast <- ugarchforecast(GARCH_Model_Stock, n.ahead = n_ahead)@forecast[["sigmaFor"]][1]
+  GARCH_Mean_Stock_forecast_2 <- ugarchforecast(GARCH_Model_Stock, n.ahead = n_ahead)@forecast[["seriesFor"]][2]
+  GARCH_Sigma_Stock_forecast_2 <- ugarchforecast(GARCH_Model_Stock, n.ahead = n_ahead)@forecast[["sigmaFor"]][2]
+  GARCH_Fitted_Sigma <- data.frame(GARCH_Lower_Sigma = fitted(GARCH_Model_Stock) - (2 * sigma(GARCH_Model_Stock)), 
+                                   GARCH_Upper_Sigma = fitted(GARCH_Model_Stock) + (2 * sigma(GARCH_Model_Stock))) 
+ 
+}
+
+{
+  
+# Matrix that shows (T+1) bounds and projected value.
+
+  GARCH_Results_Matrix <- matrix(c(
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast - (2 * GARCH_Sigma_Stock_forecast)), # Lower Bound 
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast), # Mean
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast + (2 * GARCH_Sigma_Stock_forecast)), # Upper Bound
+    (GARCH_Mean_Stock_forecast - (2 * GARCH_Sigma_Stock_forecast)), # Lower Bound 
+    (GARCH_Mean_Stock_forecast), # Mean
+    (GARCH_Mean_Stock_forecast + (2 * GARCH_Sigma_Stock_forecast))), # Upper Bound
+    nrow = 3
+  )
+
+# Matrix that shows (T+2) bounds and projected value.
+  GARCH_Results_Matrix_2_Step_ahead <- matrix(c(
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast_2 - (2 * GARCH_Sigma_Stock_forecast_2)), # Lower Bound 
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast_2), # Mean
+    df[nrow(df),1] * (1 + GARCH_Mean_Stock_forecast_2 + (2 * GARCH_Sigma_Stock_forecast_2)), # Upper Bound
+    (GARCH_Mean_Stock_forecast_2 - (2 * GARCH_Sigma_Stock_forecast_2)), # Lower Bound 
+    (GARCH_Mean_Stock_forecast_2), # Mean
+    (GARCH_Mean_Stock_forecast_2 + (2 * GARCH_Sigma_Stock_forecast_2))), # Upper Bound
+    nrow = 3
+  )
+  
+  # Naming the rows and columns in the Matrix.
+  rownames(GARCH_Results_Matrix) <- c("95% Lower Bound (T+1)",
+                                      "GARCH Mean (T+1)",
+                                      "95% Upper Bound (T+1)")
+  
+  colnames(GARCH_Results_Matrix) <- c(Stock_Pick, "Direction")
+  
+  rownames(GARCH_Results_Matrix_2_Step_ahead) <- c("95% Lower Bound (T+2)",
+                                                   "GARCH Mean (T+2)",
+                                                   "95% Upper Bound (T+2)")
+  
+  colnames(GARCH_Results_Matrix_2_Step_ahead) <- c(Stock_Pick, "Direction")
+  
+}
+
+
+# Testing the models efficiency. This just shows whether or not the model predicted the direction right (not the value).
+
+{
+  Full_accuracy_Stock <- data.frame(actual = df_Norm[,1], ARMA_prediction = ARIMA_Stock$fitted, GARCH_prediction = GARCH_Fitted_Stock)
+}
+
+for (i in 1:nrow(Full_accuracy_Stock)) {
+  if( Full_accuracy_Stock$GARCH_prediction[i] > 0 && Full_accuracy_Stock$actual[i] > 0 ){
+    Full_accuracy_Stock$iftrueGARCH[i] <- 1
+  } else if( Full_accuracy_Stock$GARCH_prediction[i] < 0 && Full_accuracy_Stock$actual[i] < 0 ) {
+    Full_accuracy_Stock$iftrueGARCH[i] <- 1 
+  } else {
+    Full_accuracy_Stock$iftrueGARCH[i] <- 0
+  }
+}
+
+# Summarizing the results into one number. This shows a percentage of accuracy in terms of predicting the direction of the stock. 
+{
+  
+  Stock_Accuracy_Percentage_GARCH <- Full_accuracy_Stock %>% 
+    summarise(GARCH_Percentage = sum(Full_accuracy_Stock$iftrueGARCH / nrow(Full_accuracy_Stock)) * 100)
+  
+}
+
+All_Accuracy_Percentage <- matrix(c(Stock_Accuracy_Percentage_GARCH$GARCH_Percentage, nrow(df_Norm)),
+                                  nrow = 2)
+rownames(All_Accuracy_Percentage) <- c("Garch % Chance",
+                                       "Sample Size")
+colnames(All_Accuracy_Percentage) <- c(Stock_Pick)
+
+# Charting out the closing price vs using the GARCH model. The GARCH bounds are also included in this chart. 
+
+stock_Chart <- ggplot() + 
+  geom_line(data = Full_accuracy_Stock, mapping = aes(x = 1:nrow(Full_accuracy_Stock), y = Full_accuracy_Stock[,1], color = 'Actual'), size = 1, alpha = 0.35) + 
+  geom_line(data = Full_accuracy_Stock, mapping = aes(x = 1:nrow(Full_accuracy_Stock), y = Full_accuracy_Stock[,3], color = 'GARCH')) +
+  geom_line(data = GARCH_Fitted_Sigma, mapping = aes(x = 1:nrow(Full_accuracy_Stock), y = GARCH_Fitted_Sigma[,1], color = 'GARCH_Bound')) + 
+  geom_line(data = GARCH_Fitted_Sigma, mapping = aes(x = 1:nrow(Full_accuracy_Stock), y = GARCH_Fitted_Sigma[,2], color = 'GARCH_Bound')) +
+  ggtitle("GARCH", as.character(Stock_Pick)) +
+  xlab("Number of Periods") + 
+  ylab("LN Percentage Return") + theme_classic() + 
+  scale_color_manual(name = "Legend", 
+                     values = c("Actual" = "green", "GARCH" = "blue", "GARCH_Bound" = "red"))
+
+# Printing all of the results to show everything that was listed above. 
+print(All_Accuracy_Percentage)
+print(Chosen_ARMA_Models)
+print(GARCH_Results_Matrix)
+print(GARCH_Results_Matrix_2_Step_ahead)
+print(stock_Chart)
+
+# Testing the model using Hypothesis Tests
+
+# Testing Stationarity
+stationary.test(df_Norm[,1], method = 'adf')
+# Testing Normality in the residuals
+# print(jarque.bera.test(GARCH_Model_Stock@fit[["residuals"]]))
+
+testing_the_model <- Full_accuracy_Stock 
+
+# Testing the model again to see how far off the model is. Basically, calculating the residuals.
+for (i in 1:nrow(testing_the_model)) {
+  testing_the_model$difference[i] <- (testing_the_model$actual[i] - testing_the_model$GARCH_prediction[i])
+}
+
+# Absolute values of the resids.
+testing_the_model$abs_values <- abs(testing_the_model$actual)
+
+# Testing to see if the direction is right then multiply the residual by 1 and if it's wrong then to multiply it by -1. 
+for (i in 1:nrow(testing_the_model)) {
+  if(testing_the_model$iftrueGARCH[i] == 0) {
+    testing_the_model$real_test[i] <- testing_the_model$abs_values[i]*-1
+  } else {
+    testing_the_model$real_test[i] <- testing_the_model$abs_values[i]*1
+  }
+}
+
+# Taking the cumulative sum of the values based on the different models. 
+testing_the_model$GARCH_cumprod <- cumsum(testing_the_model$real_test)
+testing_the_model$actual_cumprod <- cumsum(testing_the_model$actual)
+#testing_the_model$ARMA_cumprod <- cumprod(1 + testing_the_model$ARMA_prediction)
+#testing_the_model$GARCH_Potential_cumprod <- cumprod(1 + testing_the_model$iftrueGARCH)
+
+# Creating a graph (using ggplot) to show the return of 'Buying & Holding" vs "ARIMA/GARCH" vs "ARIMA".
+testing_the_model_chart <- ggplot() + 
+  geom_line(data = testing_the_model, mapping = aes(x = 1:nrow(testing_the_model), y = testing_the_model[,9], color = 'Buy & Hold'), size = 1, alpha = 0.35) + 
+  geom_line(data = testing_the_model, mapping = aes(x = 1:nrow(testing_the_model), y = testing_the_model[,8], color = 'ARIMA/GARCH Return'), size = 1, alpha = 0.35) + 
+  # geom_line(data = testing_the_model, mapping = aes(x = 1:nrow(testing_the_model), y = testing_the_model[,5], color = 'ARIMA'), size = 1, alpha = 0.35) +
+  ggtitle("Model Return vs Buy & Hold", as.character(Stock_Pick)) +
+  xlab("Number of Periods") + 
+  ylab("Cumlative Return") + theme_classic() + 
+  scale_color_manual(name = "Legend", 
+                     values = c("Buy & Hold" = "red", "ARIMA" = "blue", "ARIMA/GARCH Return" = "green"))
+                     
+# Printing the chart for the user to see.                 
+print(testing_the_model_chart)
+
+
